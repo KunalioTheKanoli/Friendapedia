@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Eulerian Circuit Finder</title>
+    <!--
+      Cytoscape lets us display the graph and highlight edges in sequence.
+    -->
+    <script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+    <style>
+      /* Layout */
+      body {
+        font-family: ui-sans-serif, system-ui, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+        background-color: #f4f7f9;
+        margin: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        height: 100vh;
+      }
+      header {
+        padding: 1rem 2rem;
+        background: #2c3e50;
+        color: #ecf0f1;
+        text-align: center;
+      }
+      header p.definition {
+        font-size: 0.95rem;
+        margin-top: 0.5rem;
+        color: #bdc3c7;
+      }
+      .controls {
+        padding: 1rem 2rem;
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 1rem;
+        background: #ffffff;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      }
+      textarea {
+        width: 100%;
+        height: 160px;
+        border: 1px solid #d1d8de;
+        border-radius: 0.5rem;
+        padding: 0.75rem;
+        resize: vertical;
+      }
+      .controls-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        align-items: flex-start;
+      }
+      button {
+        width: 100%;
+        padding: 0.5rem 0.75rem;
+        border-radius: 0.5rem;
+        border: none;
+        background: #1abc9c;
+        color: #fff;
+        font-size: 0.875rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+      button:hover:not(:disabled) { background: #16a085; }
+      #status {
+        font-size: 0.875rem;
+        color: #2c3e50;
+        min-height: 1.5rem;
+      }
+      /* Label preceding the printed list of edges */
+      #printedLabel {
+        font-weight: 600;
+        margin-top: 0.5rem;
+        color: #2c3e50;
+        display: none;  /* Hidden until a circuit is found */
+      }
+      /* Container for printed circuit edges */
+      #edgeList {
+        display: none;
+        margin-top: 0.25rem;
+        font-family: monospace;
+        background: #ffffff;
+        overflow-y: auto;
+      }
+      #edgeList div {
+        margin-bottom: 0.25rem;
+        color: #34495e;
+      }
+      /* Graph display area */
+      #container {
+        display: flex;
+        height: calc(100vh - 160px);
+      }
+      #cy {
+        flex: 1;
+        background: #ecf0f1;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Header with title and definition -->
+    <header>
+      <h1 class="text-2xl font-bold">Eulerian Circuit Finder &amp; Animator</h1>
+      <p class="definition">An <strong>Eulerian circuit</strong> is a closed trail in a graph that visits every edge exactly once and returns to the starting vertex.</p>
+    </header>
+
+    <!-- Controls: input area and action buttons -->
+    <section class="controls">
+      <div>
+        <label for="edgeInput" class="block mb-1 font-medium">Edge List (JSON array of [u, v] pairs):</label>
+        <textarea id="edgeInput" placeholder="Example: [[0,1],[1,2],[2,0],[0,3],[3,2]]"></textarea>
+      </div>
+      <div class="controls-actions">
+        <!-- Load example graph -->
+        <button id="exampleBtn">Load Example Graph</button>
+        <!-- Trigger circuit computation and animation -->
+        <button id="runBtn">Find Eulerian Circuit</button>
+        <!-- Status feedback (errors, loading, results) -->
+        <span id="status"></span>
+        <!-- Label for printed circuit list -->
+        <div id="printedLabel">Printed Circuit:</div>
+        <!-- Container for sequential edge listing -->
+        <div id="edgeList"></div>
+      </div>
+    </section>
+
+    <!-- Graph container -->
+    <div id="container">
+      <div id="cy"></div>
+    </div>
+
+    <script>
+      // Element References and Helpers
+      const statusSpan = document.getElementById("status");
+      const runBtn = document.getElementById("runBtn");
+      const edgeInput = document.getElementById("edgeInput");
+      const exampleBtn = document.getElementById("exampleBtn");
+      const edgeListDiv = document.getElementById("edgeList");
+      const printedLabel = document.getElementById("printedLabel");
+      // Update the status message shown under controls.
+      function updateStatus(msg) {
+        statusSpan.textContent = msg;
+      }
+
+      // Initialize Cytoscape
+      const cy = cytoscape({
+        container: document.getElementById("cy"),
+        style: [
+          {
+            selector: "node",
+            style: {
+              label: "data(id)",
+              "text-valign": "center",
+              "text-halign": "center",
+              width: 40,
+              height: 40,
+              "background-color": "#1abc9c",
+              color: "#ffffff",
+              "font-size": 12,
+            },
+          },
+          {
+            selector: "edge",
+            style: {
+              width: 4,
+              "line-color": "#34495e",
+              "curve-style": "bezier",
+            },
+          },
+        ],
+        layout: { name: "circle" },
+      });
+
+      // Hierholzer's Algorithm for Eulerian Circuit
+      function findEulerianCircuit(edgeList) {
+        // Build adjacency list
+        const adj = {};
+        edgeList.forEach(([u, v]) => {
+          (adj[u] = adj[u] || []).push(v);
+          (adj[v] = adj[v] || []).push(u);
+        });
+        // If any vertex has odd degree, no Eulerian circuit exists
+        for (const node in adj) {
+          if (adj[node].length % 2 !== 0) {
+            return { eulerian: false };
+          }
+        }
+        // Clone adjacency for edge removal
+        const graph = {};
+        for (const node in adj) graph[node] = adj[node].slice();
+
+        const start = edgeList[0][0];
+        const stack = [start];
+        const path = [];
+
+        // Walk until all edges used
+        while (stack.length) {
+          const v = stack[stack.length - 1];
+          if (graph[v].length) {
+            // Remove edge v→u
+            const u = graph[v].pop();
+            const idx = graph[u].indexOf(v);
+            graph[u].splice(idx, 1);
+            stack.push(u);
+          } else {
+            // Backtrack
+            path.push(stack.pop());
+          }
+        }
+
+        // Convert vertex path to edge pairs
+        const circuit = [];
+        for (let i = 0; i < path.length - 1; i++) {
+          circuit.push([path[i], path[i + 1]]);
+        }
+        return { eulerian: true, circuit };
+      }
+
+      // ---- UI Event Listeners ----
+      exampleBtn.addEventListener("click", () => {
+        // Populate example edge list
+        edgeInput.value = JSON.stringify([[0,1],[1,2],[2,0],[0,3],[3,2]]);
+        updateStatus("Example graph loaded. Ready to run.");
+      });
+
+      runBtn.addEventListener("click", () => {
+        let edges;
+        try {
+          edges = JSON.parse(edgeInput.value);
+          if (!Array.isArray(edges)) throw new Error();
+        } catch {
+          updateStatus("Invalid JSON. Enter an array of [u,v] pairs.");
+          return;
+        }
+        updateStatus("Computing Eulerian circuit…");
+
+        // Compute circuit
+        const res = findEulerianCircuit(edges);
+        renderGraph(edges, res.eulerian ? res.circuit : []);
+
+        if (!res.eulerian) {
+          updateStatus(" Our graph is NOT Eulerian (odd-degree vertex).");
+        } else {
+          updateStatus("We found an Eulerian circuit! Animating…");
+          animateCircuit(res.circuit);
+        }
+      });
+
+      // Draws the graph in Cytoscape and optionally displays the printed circuit.
+      function renderGraph(edgeList, tour) {
+        // Build node and edge elements
+        const nodes = [...new Set(edgeList.flat())].map(id => ({ data: { id: String(id) } }));
+        const edges = edgeList.map((e, i) => ({ data: { id: `e${i}`, source: String(e[0]), target: String(e[1]) } }));
+
+        cy.elements().remove(); // clear previous
+        cy.add([...nodes, ...edges]);
+        cy.layout({ name: 'circle' }).run();
+
+        // Display printed circuit if exists
+        if (tour.length) {
+          printedLabel.style.display = 'block';
+          edgeListDiv.style.display = 'block';
+          edgeListDiv.innerHTML = '';
+          tour.forEach((pair, idx) => {
+            const div = document.createElement('div');
+            div.id = `list-edge-${idx}`;
+            div.textContent = `${pair[0]} → ${pair[1]}`;
+            edgeListDiv.appendChild(div);
+          });
+        } else {
+          printedLabel.style.display = 'none';
+          edgeListDiv.style.display = 'none';
+        }
+      }
+
+      // Animates the circuit by highlighting edges in sequence.
+      function animateCircuit(edgePairs) {
+        const highlight = '#e74c3c';
+        let i = 0;
+        // Create lookup from node-pair to Cytoscape edge
+        const map = new Map();
+        cy.edges().forEach(e => {
+          const a = e.source().id(), b = e.target().id();
+          map.set(`${a}-${b}`, e);
+          map.set(`${b}-${a}`, e);
+        });
+
+        (function step() {
+          if (i >= edgePairs.length) return;
+          const [u, v] = edgePairs[i];
+          const ed = map.get(`${u}-${v}`);
+          if (ed) ed.style('line-color', highlight);
+          // Also highlight printed list item
+          const listItem = document.getElementById(`list-edge-${i}`);
+          if (listItem) listItem.style.color = highlight;
+          i++;
+          setTimeout(step, 600); // delay between highlights
+        })();
+      }
+    </script>
+  </body>
+</html>
