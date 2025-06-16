@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Simple aesthetics */
+body {
+  @apply bg-gray-50 text-gray-800 selection:bg-primary selection:text-white;
+}
+h1,h2,h3,h4 {
+  @apply font-semibold text-primary;
+}
